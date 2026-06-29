@@ -1,0 +1,10 @@
+flask
+gunicorn
+click
+httpx
+rich
+pydantic
+prompt_toolkit
+throttlebuster
+beautifulsoup4
+strenum
