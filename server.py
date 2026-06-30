@@ -1,22 +1,17 @@
 import os
-import asyncio
 from flask import Flask, jsonify, request
 
-# অফিশিয়াল ডকুমেন্টেশনের সঠিক পাথ অনুযায়ী মডিউলগুলো ইমপোর্ট করা হলো
+# মুভিবক্সের আসল মডিউলগুলো ইমপোর্ট করা হলো
 from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
 from moviebox_api.v1 import DownloadableMovieFilesDetail
 from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
 
-def run_async(async_func):
-    """Async ফাংশন রান করার হেল্পার"""
-    return asyncio.run(async_func)
-
 def get_homepage_raw_data():
-    """হোমপেজের মেইন জেসন ডাটা ব্যাকগ্রাউন্ডে তুলে আনার ফাংশন"""
+    """হোমপেজের মেইন জেসন ডাটা সিঙ্কোনাসলি তুলে আনার ফাংশন"""
     hp = Homepage()
-    return run_async(hp.get_content())
+    return hp.get_content_sync()
 
 def get_items_by_index(index_num):
     """operatingList এর নির্দিষ্ট পজিশন থেকে মুভির লিস্ট বের করার ফাংশন"""
@@ -73,7 +68,7 @@ def search_v1():
         return jsonify({"status": "error", "message": "Query parameter 'q' is missing"})
     try:
         sh = Search(keyword=q)
-        raw_json = run_async(sh.get_content())
+        raw_json = sh.get_content_sync()
         return jsonify({"status": "success", "data": raw_json})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
@@ -104,12 +99,12 @@ def get_download_urls():
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        # ৪. মুভির মূল মেটাডাটা মডেল বের করা
-        target_movie_details_model = run_async(provider.get_content_model())
+        # ৪. মুভির মূল মেটাডাটা মডেল বের করা (সিঙ্কোনাসলি)
+        target_movie_details_model = provider.get_content_model_sync()
         
-        # ৫. আসল ফুল মুভির প্লে-লিংক এবং ডাউনলোডের ডাটা এক্সট্রাক্ট করা
+        # ৫. আসল ফুল মুভির প্লে-লিংক এবং ডাউনলোডের ডাটা এক্সট্রাক্ট করা (সিঙ্কোনাসলি)
         downloadable_files = DownloadableMovieFilesDetail(sess, target_movie_details_model)
-        downloadable_files_detail = run_async(downloadable_files.get_content())
+        downloadable_files_detail = downloadable_files.get_content_sync()
         
         return jsonify({
             "status": "success", 
