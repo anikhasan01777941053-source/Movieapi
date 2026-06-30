@@ -90,7 +90,7 @@ def search_v1():
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
-    provider = MovieDetails(url=detail_path)
+    provider = MovieDetails(path=detail_path)
     item_type = request.args.get('type', 'movie')
     
     if not provider:
@@ -98,9 +98,9 @@ def get_download_urls():
         
     try:
         if item_type.lower() == 'series':
-            provider = TVSeriesDetails(detail_path=detail_path)
+            provider = TVSeriesDetails(path=detail_path)
         else:
-            provider = MovieDetails(detail_path=detail_path)
+            provider = MovieDetails(path=detail_path)
             
         video_data = run_async(provider.get_content())
         return jsonify({"status": "success", "data": video_data})
