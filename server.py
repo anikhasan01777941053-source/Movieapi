@@ -90,23 +90,54 @@ def search_v1():
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
-    provider = MovieDetails(path=detail_path)
+    provider = MovieDetails(detail_path=detail_path)
     item_type = request.args.get('type', 'movie')
     
     if not provider:
         return jsonify({"status": "error", "message": "Parameter 'path' (provider) is missing"})
         
     try:
-        if item_type.lower() == 'series':
-            provider = TVSeriesDetails(path=detail_path)
-        else:
+        # আমরা ট্রাই করছি দেখার জন্য যে এই ক্লাসের ভেতরে কী কী প্যারামিটার নেওয়া সম্ভব
+        import inspect
+        try:
+            # মুভির জন্য চেক
+            sig = inspect.signature(MovieDetails.__init__)
+            params = list(sig.parameters.keys())
+        except Exception:
+            params = ["unknown"]
+
+        # এবার আপনার মডিউল অনুযায়ী সঠিক প্যারামিটারটি খুঁজে নিয়ে অবজেক্ট তৈরি করা
+        if 'detail_path' in params:
+            provider = MovieDetails(detail_path=detail_path)
+        elif 'path' in params:
             provider = MovieDetails(path=detail_path)
+        elif 'id' in params:
+            provider = MovieDetails(id=detail_path)
+        elif 'url' in params:
+            provider = MovieDetails(url=detail_path)
+        else:
+            # যদি এর কোনোটিই না মিলে, তবে মেইন আর্গুমেন্ট যেটা প্রথম পজিশনে আছে সেটা দেওয়া
+            provider = MovieDetails(detail_path)
             
         video_data = run_async(provider.get_content())
         return jsonify({"status": "success", "data": video_data})
+        
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
+        # এখানে আমরা মডিউলের আসল প্যারামিটার লিস্ট এবং এরর একসাথে দেখাবো যেন ১ বারেই ফিক্স হয়
+        import inspect
+        try:
+            m_params = str(inspect.signature(MovieDetails.__init__))
+            t_params = str(inspect.signature(TVSeriesDetails.__init__))
+        except:
+            m_params = "N/A"
+            t_params = "N/A"
+            
+        return jsonify({
+            "status": "error", 
+            "message": str(e),
+            "MovieDetails_expects": m_params,
+            "TVSeriesDetails_expects": t_params
+        })
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
