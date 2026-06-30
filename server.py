@@ -2,8 +2,8 @@ import os
 import asyncio
 from flask import Flask, jsonify, request
 
-# মুভিবক্সের আসল মডিউল এবং সেশন ইমপোর্ট করা হচ্ছে
-from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+# অফিশিয়াল ডকুমেন্টেশন অনুযায়ী নতুন মডিউলগুলো ইমপোর্ট করা হলো
+from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, DownloadableMovieFilesDetail
 from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
@@ -78,39 +78,48 @@ def search_v1():
         return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. ভিডিও ডাউনলোড ও আসল স্ট্রিম ইউআরএল ====================
+# ==================== ৩. আসল ফুল মুভি ও সিরিজ ভিডিও লিংক জেনারেটর ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
     detail_path = request.args.get('path', '')
-    item_type = request.args.get('type', 'movie') # ডিফল্ট মুভি, তবে সিরিজ হলে 'series' পাঠাতে হবে
+    item_type = request.args.get('type', 'movie')
     
     if not detail_path:
-        return jsonify({"status": "error", "message": "Parameter 'path' (detailPath) is missing"})
+        return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
         
     try:
-        # ১. সেশন অবজেক্ট তৈরি করা
+        # ১. সেশন তৈরি করা
         sess = Session()
         
-        # ২. ইনপুট যদি শুধু আইডি হয়, তবে সেটাকে ফুল এইচটিটিপি (HTTP) ইউআরএল-এ কনভার্ট করা
+        # ২. আইডি থাকলে ফুল ইউআরএল ফরম্যাটে কনভার্ট করা
         full_url = detail_path
-        if not detail_path.startswith("http"):
-            full_url = f"https://h5.aoneroom.com/detail/{detail_path}"
+        if not detail_path.startswith("http") and not detail_path.startswith("/detail"):
+            full_url = f"/detail/{detail_path}"
 
-        # ৩. আপনার স্ক্রিনশটের subjectType=2 (Series) অনুযায়ী বা প্যারামিটার অনুযায়ী প্রোভাইডার সেট করা
+        # ৩. মুভি নাকি সিরিজ সেই অনুযায়ী প্রথম অবজেক্ট বা মেটাডাটা নেওয়া
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        # ৪. মুভিবক্স থেকে আসল ভিডিও ডাউনলোড/প্লে লিঙ্ক স্ক্র্যাপ করে আনা
-        video_data = run_async(provider.get_content())
-        return jsonify({"status": "success", "data": video_data})
+        # ৪. মুভির মূল মডেল ডাটা বের করা
+        target_movie_details_model = run_async(provider.get_content_model())
+        
+        # ৫. [অফিশিয়াল ডকুমেন্টেশন ট্রিক]: আসল ফুল মুভির প্লে-লিংক এবং ডাউনলোডের ডাটা এক্সট্রাক্ট করা
+        downloadable_files = DownloadableMovieFilesDetail(sess, target_movie_details_model)
+        downloadable_files_detail = run_async(downloadable_files.get_content())
+        
+        return jsonify({
+            "status": "success", 
+            "item_type": item_type,
+            "data": downloadable_files_detail
+        })
         
     except Exception as e:
         return jsonify({
             "status": "error", 
-            "message": "ভিডিও লিংক জেনারেট করতে সমস্যা হয়েছে।",
+            "message": "ফুল ভিডিও লিংক জেনারেট করতে সমস্যা হয়েছে।",
             "error_details": str(e)
         })
 
