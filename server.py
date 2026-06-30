@@ -26,7 +26,7 @@ def get_items_by_index(index_num):
             # নির্দিষ্ট পজিশনের আইটেম নেওয়া হচ্ছে
             section = operating_list[index_num]
             
-            # আপনার ৩ নম্বর স্ক্রিনশটের স্ট্রাকচার অনুযায়ী items বের করা হচ্ছে
+            # স্ট্রাকচার অনুযায়ী items বের করা হচ্ছে
             banner_data = section.get("banner", {}) if section else {}
             items = banner_data.get("items", []) if banner_data else []
             
@@ -82,7 +82,11 @@ def search_v1():
         sh = Search(keyword=q)
         raw_json = run_async(sh.get_content())
         return jsonify({"status": "success", "data": raw_json})
-    # ==================== ৩. ভিডিও ডাউনলোড ও আসল স্ট্রিম ইউআরএল ====================
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+# ==================== ৩. ভিডিও ডাউনলোড ও আসল স্ট্রিম ইউআরএল ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
