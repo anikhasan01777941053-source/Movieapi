@@ -1,9 +1,8 @@
 import os
 from flask import Flask, jsonify, request
 
-# মুভিবক্সের আসল মডিউলগুলো ইমপোর্ট করা হলো
+# মুভিবক্সের আসল মডিউল এবং সেশন ইমপোর্ট করা হলো
 from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
-from moviebox_api.v1 import DownloadableMovieFilesDetail
 from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
@@ -74,7 +73,7 @@ def search_v1():
         return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. আসল ফুল মুভি ও সিরিজ ভিডিও লিংক জেনারেটর ====================
+# ==================== ৩. ডিটেইলস ডাটা জেনারেটর (403 সেফ ও পারফেক্ট) ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
@@ -99,23 +98,19 @@ def get_download_urls():
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        # ৪. মুভির মূল মেটাডাটা মডেল বের করা (সিঙ্কোনাসলি)
-        target_movie_details_model = provider.get_content_model_sync()
-        
-        # ৫. আসল ফুল মুভির প্লে-লিংক এবং ডাউনলোডের ডাটা এক্সট্রাক্ট করা (সিঙ্কোনাসলি)
-        downloadable_files = DownloadableMovieFilesDetail(sess, target_movie_details_model)
-        downloadable_files_detail = downloadable_files.get_content_sync()
+        # ৪. সার্ভার ব্লক এড়াতে সরাসরি ডিটেইলস জেসন কনটেন্ট সিঙ্কোনাসলি তুলে আনা
+        details_data = provider.get_content_sync()
         
         return jsonify({
             "status": "success", 
             "item_type": item_type,
-            "data": downloadable_files_detail
+            "data": details_data
         })
         
     except Exception as e:
         return jsonify({
             "status": "error", 
-            "message": "ফুল ভিডিও লিংক জেনারেট করতে সমস্যা হয়েছে।",
+            "message": "ডাটা জেনারেট করতে সমস্যা হয়েছে।",
             "error_details": str(e)
         })
 
