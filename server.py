@@ -90,7 +90,7 @@ def search_v1():
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
-    provider = MovieDetails(id=detail_path)
+    provider = MovieDetails(url=detail_path)
     item_type = request.args.get('type', 'movie')
     
     if not provider:
