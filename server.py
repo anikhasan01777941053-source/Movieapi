@@ -2,8 +2,9 @@ import os
 import asyncio
 from flask import Flask, jsonify, request
 
-# মুভিবক্সের আসল মডিউলগুলো ইমপোর্ট করা হচ্ছে
+# মুভিবক্সের আসল মডিউল এবং সেশন ইমপোর্ট করা হচ্ছে
 from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
 
@@ -23,13 +24,9 @@ def get_items_by_index(index_num):
         operating_list = raw_json.get("operatingList", [])
         
         if len(operating_list) > index_num:
-            # নির্দিষ্ট পজিশনের আইটেম নেওয়া হচ্ছে
             section = operating_list[index_num]
-            
-            # স্ট্রাকচার অনুযায়ী items বের করা হচ্ছে
             banner_data = section.get("banner", {}) if section else {}
             items = banner_data.get("items", []) if banner_data else []
-            
             return {"status": "success", "count": len(items), "data": items}
             
         return {"status": "success", "count": 0, "data": []}
@@ -37,11 +34,10 @@ def get_items_by_index(index_num):
         return {"status": "error", "message": str(e)}
 
 
-# ==================== ১. হোমপেজের ভাগ ভাগ করা সব ক্যাটাগরি (ইন্ডেক্স অনুযায়ী) ====================
+# ==================== ১. হোমপেজের ভাগ ভাগ করা সব ক্যাটাগরি ====================
 
 @app.route('/v1/homepage/banner', methods=['GET'])
 def get_homepage_banner():
-    """টপ স্লাইডার ব্যানার"""
     try:
         raw_json = get_homepage_raw_data()
         banner_data = raw_json.get("banner", {})
@@ -52,22 +48,18 @@ def get_homepage_banner():
 
 @app.route('/v1/homepage/trending', methods=['GET'])
 def get_homepage_trending():
-    """১ম ক্যাটাগরি (Trending Now) - ইন্ডেক্স ০"""
     return jsonify(get_items_by_index(0))
 
 @app.route('/v1/homepage/cinema', methods=['GET'])
 def get_homepage_cinema():
-    """২য় ক্যাটাগরি (Cinema) - ইন্ডেক্স ১"""
     return jsonify(get_items_by_index(1))
 
 @app.route('/v1/homepage/hotshort', methods=['GET'])
 def get_homepage_hotshort():
-    """৩য় ক্যাটাগরি (Hot Short TV) - ইন্ডেক্স ২"""
     return jsonify(get_items_by_index(2))
 
 @app.route('/v1/homepage/popular', methods=['GET'])
 def get_homepage_popular():
-    """৪র্থ ক্যাটাগরি (Popular/Bollywood) - ইন্ডেক্স ৩"""
     return jsonify(get_items_by_index(3))
 
 
@@ -97,54 +89,23 @@ def get_download_urls():
         return jsonify({"status": "error", "message": "Parameter 'path' (detailPath) is missing"})
         
     try:
-        # আমরা চেক করছি MovieDetails ক্লাসটি আসলে কী কী প্যারামিটার সাপোর্ট করে
-        import inspect
-        try:
-            if item_type.lower() == 'series':
-                sig = inspect.signature(TVSeriesDetails.__init__)
-            else:
-                sig = inspect.signature(MovieDetails.__init__)
-            params = list(sig.parameters.keys())
-        except Exception:
-            params = ["unknown"]
+        # ১. একটি সেশন অবজেক্ট তৈরি করা (যা মুভিবক্স এপিআই রিকোয়ার করে)
+        sess = Session()
 
-        # সঠিক প্যারামিটার অনুযায়ী অবজেক্ট তৈরি করা
+        # ২. সেশনসহ অবজেক্ট তৈরি করা
         if item_type.lower() == 'series':
-            if 'detail_path' in params:
-                provider = TVSeriesDetails(detail_path=detail_path)
-            elif 'path' in params:
-                provider = TVSeriesDetails(path=detail_path)
-            elif 'id' in params:
-                provider = TVSeriesDetails(id=detail_path)
-            else:
-                provider = TVSeriesDetails(detail_path)
+            provider = TVSeriesDetails(detail_path, session=sess)
         else:
-            if 'detail_path' in params:
-                provider = MovieDetails(detail_path=detail_path)
-            elif 'path' in params:
-                provider = MovieDetails(path=detail_path)
-            elif 'id' in params:
-                provider = MovieDetails(id=detail_path)
-            else:
-                provider = MovieDetails(detail_path)
+            provider = MovieDetails(detail_path, session=sess)
             
         video_data = run_async(provider.get_content())
         return jsonify({"status": "success", "data": video_data})
         
     except Exception as e:
-        import inspect
-        try:
-            m_params = str(inspect.signature(MovieDetails.__init__))
-            t_params = str(inspect.signature(TVSeriesDetails.__init__))
-        except:
-            m_params = "N/A"
-            t_params = "N/A"
-            
         return jsonify({
             "status": "error", 
-            "message": str(e),
-            "MovieDetails_expects": m_params,
-            "TVSeriesDetails_expects": t_params
+            "message": "ভিডিও লিংক জেনারেট করতে সমস্যা হয়েছে।",
+            "error_details": str(e)
         })
 
 if __name__ == '__main__':
