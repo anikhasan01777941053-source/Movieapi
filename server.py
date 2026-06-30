@@ -2,8 +2,9 @@ import os
 import asyncio
 from flask import Flask, jsonify, request
 
-# অফিশিয়াল ডকুমেন্টেশন অনুযায়ী নতুন মডিউলগুলো ইমপোর্ট করা হলো
-from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, DownloadableMovieFilesDetail
+# অফিশিয়াল ডকুমেন্টেশনের সঠিক পাথ অনুযায়ী মডিউলগুলো ইমপোর্ট করা হলো
+from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+from moviebox_api.v1 import DownloadableMovieFilesDetail
 from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
@@ -92,21 +93,21 @@ def get_download_urls():
         # ১. সেশন তৈরি করা
         sess = Session()
         
-        # ২. আইডি থাকলে ফুল ইউআরএল ফরম্যাটে কনভার্ট করা
+        # ২. আইডি বা পাথ থাকলে ফুল ইউআরএল ফরম্যাটে কনভার্ট করা
         full_url = detail_path
         if not detail_path.startswith("http") and not detail_path.startswith("/detail"):
             full_url = f"/detail/{detail_path}"
 
-        # ৩. মুভি নাকি সিরিজ সেই অনুযায়ী প্রথম অবজেক্ট বা মেটাডাটা নেওয়া
+        # ৩. মুভি নাকি সিরিজ সেই অনুযায়ী অবজেক্ট কল করা
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        # ৪. মুভির মূল মডেল ডাটা বের করা
+        # ৪. মুভির মূল মেটাডাটা মডেল বের করা
         target_movie_details_model = run_async(provider.get_content_model())
         
-        # ৫. [অফিশিয়াল ডকুমেন্টেশন ট্রিক]: আসল ফুল মুভির প্লে-লিংক এবং ডাউনলোডের ডাটা এক্সট্রাক্ট করা
+        # ৫. আসল ফুল মুভির প্লে-লিংক এবং ডাউনলোডের ডাটা এক্সট্রাক্ট করা
         downloadable_files = DownloadableMovieFilesDetail(sess, target_movie_details_model)
         downloadable_files_detail = run_async(downloadable_files.get_content())
         
