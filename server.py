@@ -83,21 +83,27 @@ def search_v1():
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
     detail_path = request.args.get('path', '')
-    item_type = request.args.get('type', 'movie')
+    item_type = request.args.get('type', 'movie') # ডিফল্ট মুভি, তবে সিরিজ হলে 'series' পাঠাতে হবে
     
     if not detail_path:
         return jsonify({"status": "error", "message": "Parameter 'path' (detailPath) is missing"})
         
     try:
-        # ১. একটি সেশন অবজেক্ট তৈরি করা (যা মুভিবক্স এপিআই রিকোয়ার করে)
+        # ১. সেশন অবজেক্ট তৈরি করা
         sess = Session()
+        
+        # ২. ইনপুট যদি শুধু আইডি হয়, তবে সেটাকে ফুল এইচটিটিপি (HTTP) ইউআরএল-এ কনভার্ট করা
+        full_url = detail_path
+        if not detail_path.startswith("http"):
+            full_url = f"https://h5.aoneroom.com/detail/{detail_path}"
 
-        # ২. সেশনসহ অবজেক্ট তৈরি করা
-        if item_type.lower() == 'series':
-            provider = TVSeriesDetails(detail_path, session=sess)
+        # ৩. আপনার স্ক্রিনশটের subjectType=2 (Series) অনুযায়ী বা প্যারামিটার অনুযায়ী প্রোভাইডার সেট করা
+        if item_type.lower() == 'series' or 'tv' in detail_path.lower():
+            provider = TVSeriesDetails(full_url, session=sess)
         else:
-            provider = MovieDetails(detail_path, session=sess)
+            provider = MovieDetails(full_url, session=sess)
             
+        # ৪. মুভিবক্স থেকে আসল ভিডিও ডাউনলোড/প্লে লিঙ্ক স্ক্র্যাপ করে আনা
         video_data = run_async(provider.get_content())
         return jsonify({"status": "success", "data": video_data})
         
