@@ -90,11 +90,11 @@ def search_v1():
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
-    detail_path = request.args.get('path', '')
+    provider = MovieDetails(detail_path=detail_path)
     item_type = request.args.get('type', 'movie')
     
-    if not detail_path:
-        return jsonify({"status": "error", "message": "Parameter 'path' (detailPath) is missing"})
+    if not provider:
+        return jsonify({"status": "error", "message": "Parameter 'path' (provider) is missing"})
         
     try:
         if item_type.lower() == 'series':
