@@ -1,7 +1,7 @@
 import os
-import httpx
 from flask import Flask, jsonify, request
 from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+from moviebox_api.v1 import DownloadableMovieFilesDetail
 from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
@@ -23,6 +23,7 @@ def get_items_by_index(index_num):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+# ==================== ১. হোমপেজ ক্যাটাগরি সমূহ ====================
 @app.route('/v1/homepage/banner', methods=['GET'])
 def get_homepage_banner():
     try:
@@ -30,8 +31,7 @@ def get_homepage_banner():
         banner_data = raw_json.get("banner", {})
         items = banner_data.get("items", []) if banner_data else []
         return jsonify({"status": "success", "count": len(items), "data": items})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+    except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/v1/homepage/trending', methods=['GET'])
 def get_homepage_trending(): return jsonify(get_items_by_index(0))
@@ -45,6 +45,7 @@ def get_homepage_hotshort(): return jsonify(get_items_by_index(2))
 @app.route('/v1/homepage/popular', methods=['GET'])
 def get_homepage_popular(): return jsonify(get_items_by_index(3))
 
+# ==================== ২. মুভি ও সিরিজ সার্চ ====================
 @app.route('/v1/search', methods=['GET'])
 def search_v1():
     q = request.args.get('q', '')
@@ -55,7 +56,7 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. ভিডিও ডাউনলোড লিংক জেনারেটর (ফাইনাল হেডার বাইপাস) ====================
+# ==================== ৩. ভিডিওর আসল ডাউনলোড ফাইল লিংক জেনারেটর ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
@@ -66,62 +67,62 @@ def get_download_urls():
         return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
         
     try:
+        # ১. সেশন তৈরি করা
         sess = Session()
+        
+        # ২. ফুল ইউআরএল পাথ সেট করা
         full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
 
-        # ১. প্রথমে মুভি বা সিরিজের আইডি (subjectId) বের করার জন্য ডিটেইলস নিয়ে আসা
+        # ৩. মুভি বা সিরিজ অনুযায়ী অবজেক্ট কল করা
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        details_data = provider.get_content_sync()
+        # ৪. মুভির মূল মেটাডাটা মডেল বের করা
+        target_movie_details_model = provider.get_content_model_sync()
         
-        # জেসন থেকে মেইন সাবজেক্ট আইডি তুলে নেওয়া
-        subject_id = details_data.get("subjectId") or details_data.get("subject", {}).get("subjectId")
+        # ৫. অফিশিয়াল লাইব্রেরি দিয়ে ভিডিও ফাইল ও ডাউনলোডের ডাটা এক্সট্রাক্ট করা
+        downloadable_files = DownloadableMovieFilesDetail(sess, target_movie_details_model)
+        downloadable_files_detail = downloadable_files.get_content_sync()
         
-        if not subject_id:
-            return jsonify({"status": "error", "message": "Subject ID could not be extracted", "data": details_data})
-
-        # ২. মুভিবক্সের নিজস্ব ডাউনলোড এপিআই-তে রিকোয়েস্ট পাঠানো (উইথ পারফেক্ট ব্রাউজার হেডার)
-        download_api_url = f"https://h5.aoneroom.com/wefeed-h5-bff/web/subject/download?subjectId={subject_id}&se=1&ep=1"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://fmoviesunblocked.net/",
-            "Origin": "https://h5.aoneroom.com",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Platform": "web"
-        }
-
-        # পাইথনের নিজস্ব ক্লায়েন্ট দিয়ে কুকি এবং হেডারসহ রিকোয়েস্ট এক্সেকিউট করা
-        with httpx.Client(headers=headers, follow_redirects=True) as client:
-            response = client.get(download_api_url)
-            video_json = response.json()
-
-        # যদি ডাউনলোড ডাটা সাকসেসফুলি চলে আসে
-        if video_json.get("data", {}).get("downloads") or video_json.get("data", {}).get("hasResource"):
-            return jsonify({
-                "status": "success",
-                "item_type": item_type,
-                "subject_id": subject_id,
-                "data": video_json.get("data")
-            })
-        
-        # কোনো কারণে ফাঁকা আসলে ব্যাকআপ হিসেবে র ডিটেইলস ডাটাটাই ফেরত পাঠানো
+        # যদি সাকসেসফুলি ভিডিওর লিস্ট পাওয়া যায়
         return jsonify({
-            "status": "success",
-            "note": "Raw details bypass",
-            "data": details_data
+            "status": "success", 
+            "item_type": item_type,
+            "data": downloadable_files_detail
         })
         
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": "লিংক জেনারেট করতে সমস্যা হয়েছে।",
-            "error_details": str(e)
-        })
+        # যদি সার্ভার ব্লক বা ৪MD এরর আসে, তাহলে আমরা অটোমেটিক আরেকটি ফ্রি পাবলিক প্রক্সি দিয়ে ট্রাই করব
+        try:
+            # একটি ফ্রি প্রক্সি সেটআপ (যা মুভিবক্সের ৪MD ব্লক রিমুভ করবে)
+            os.environ["HTTP_PROXY"] = "http://20.111.54.16:80"  # ব্যাকআপ পাবলিক প্রক্সি আইপি
+            os.environ["HTTPS_PROXY"] = "http://20.111.54.16:80"
+            
+            sess_proxy = Session()
+            if item_type.lower() == 'series' or 'tv' in detail_path.lower():
+                provider = TVSeriesDetails(full_url, session=sess_proxy)
+            else:
+                provider = MovieDetails(full_url, session=sess_proxy)
+                
+            target_movie_details_model = provider.get_content_model_sync()
+            downloadable_files = DownloadableMovieFilesDetail(sess_proxy, target_movie_details_model)
+            downloadable_files_detail = downloadable_files.get_content_sync()
+            
+            return jsonify({
+                "status": "success",
+                "proxy_used": True,
+                "item_type": item_type,
+                "data": downloadable_files_detail
+            })
+        except Exception as proxy_err:
+            return jsonify({
+                "status": "error", 
+                "message": "মুভিবক্স সিকিউরিটির কারণে ভিডিও লিংক জেনারেট করা যাচ্ছে না।",
+                "error_details": str(e),
+                "proxy_error": str(proxy_err)
+            })
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
