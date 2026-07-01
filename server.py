@@ -1,8 +1,28 @@
 import os
-import httpx
+import sys
+import subprocess
+
+# 🔥 ডাইনামিকালি গিটহাব থেকে লাইব্রেরি ফোল্ডার ডাউনলোড ও সেটআপ করার লজিক
+REPO_DIR = "Moviebox_API"
+REPO_URL = "https://github.com/walterwhite-69/Moviebox-API.git"
+
+if not os.path.exists(REPO_DIR):
+    print(f"Cloning dependency from {REPO_URL}...")
+    subprocess.run(["git", "clone", REPO_URL, REPO_DIR], check=True)
+
+# লাইব্রেরির পাথ পাইথনের এনভায়রনমেন্টে যুক্ত করা
+sys.path.append(os.path.abspath(REPO_DIR))
+
+# এখন অফিশিয়ালি ইম্পোর্টগুলো সফলভাবে কাজ করবে
 from flask import Flask, jsonify, request
-from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
-from moviebox_api.v1.requests import Session
+try:
+    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+    from moviebox_api.v1.requests import Session
+except ImportError:
+    # যদি পাথ স্ট্রাকচার সাবফোল্ডারে থাকে তবে তার ব্যাকআপ হ্যান্ডলিং
+    sys.path.append(os.path.abspath(os.path.join(REPO_DIR, "moviebox_api")))
+    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+    from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
 
@@ -78,7 +98,7 @@ def get_download_urls():
             
         raw_details = provider.get_content_sync()
         
-        # ১. resData কনটেইনার আনপ্যাকিং (সবচেয়ে গুরুত্বপূর্ণ পার্ট)
+        # ১. resData কনটেইনার আনপ্যাকিং
         details_data = {}
         if isinstance(raw_details, dict):
             if "resData" in raw_details and isinstance(raw_details["resData"], dict):
