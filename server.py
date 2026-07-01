@@ -1,7 +1,6 @@
 import os
 from flask import Flask, jsonify, request
 from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
-from moviebox_api.v1 import DownloadableMovieFilesDetail
 from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
@@ -56,7 +55,7 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. ভিডিওর আসল ডাউনলোড ফাইল লিংক জেনারেটর ====================
+# ==================== ৩. ভিডিও ডাউনলোড ও প্লে-লিংক জেনারেটর ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
@@ -67,62 +66,68 @@ def get_download_urls():
         return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
         
     try:
-        # ১. সেশন তৈরি করা
         sess = Session()
-        
-        # ২. ফুল ইউআরএল পাথ সেট করা
         full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
 
-        # ৩. মুভি বা সিরিজ অনুযায়ী অবজেক্ট কল করা
+        # মুভি বা সিরিজ অনুযায়ী মেইন ডিটেইলস ডাটা তুলে আনা
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        # ৪. মুভির মূল মেটাডাটা মডেল বের করা
-        target_movie_details_model = provider.get_content_model_sync()
+        details_data = provider.get_content_sync()
         
-        # ৫. অফিশিয়াল লাইব্রেরি দিয়ে ভিডিও ফাইল ও ডাউনলোডের ডাটা এক্সট্রাক্ট করা
-        downloadable_files = DownloadableMovieFilesDetail(sess, target_movie_details_model)
-        downloadable_files_detail = downloadable_files.get_content_sync()
+        # আমাদের নিজস্ব স্ট্রাকচারড রেসপন্স তৈরি করা যা স্কেচওয়্যারে সহজে পার্স করা যাবে
+        video_links = []
         
-        # যদি সাকসেসফুলি ভিডিওর লিস্ট পাওয়া যায়
+        # ১. মুভির ক্ষেত্রে যদি সরাসরি ডিরেক্ট প্লে লিংক (videoAddress) থাকে
+        if "videoAddress" in details_data and details_data["videoAddress"]:
+            v_addr = details_data["videoAddress"]
+            if v_addr.get("url"):
+                video_links.append({
+                    "quality": f"{v_addr.get('definition', 'Default')} (Movie)",
+                    "url": v_addr.get("url"),
+                    "size": v_addr.get("size", 0)
+                })
+                
+        # ২. ট্রেইলার বা প্রিভিউ লিংক যদি থাকে সেটাও ব্যাকআপ হিসেবে অ্যাড করা
+        if "trailer" in details_data and details_data["trailer"]:
+            trailer_data = details_data["trailer"]
+            # যদি এর ভেতরেও কোনো ভিডিও অ্যাড্রেস থাকে
+            if isinstance(trailer_data, dict) and trailer_data.get("videoAddress"):
+                t_addr = trailer_data["videoAddress"]
+                if t_addr.get("url"):
+                    video_links.append({
+                        "quality": "Preview / Trailer",
+                        "url": t_addr.get("url"),
+                        "size": t_addr.get("size", 0)
+                    })
+
+        # যদি কোনো লিংক খুঁজে পায়
+        if video_links:
+            return jsonify({
+                "status": "success",
+                "item_type": item_type,
+                "has_video": True,
+                "downloads": video_links,
+                "full_data": details_data  # ব্যাকআপ হিসেবে পুরো জেসনও থাকলো
+            })
+            
+        # কোনো কারণে ডিরেক্ট লিংক রেডি না থাকলে সেফ জেসন রেসপন্স পাঠানো
         return jsonify({
-            "status": "success", 
+            "status": "success",
             "item_type": item_type,
-            "data": downloadable_files_detail
+            "has_video": False,
+            "downloads": [],
+            "full_data": details_data
         })
         
     except Exception as e:
-        # যদি সার্ভার ব্লক বা ৪MD এরর আসে, তাহলে আমরা অটোমেটিক আরেকটি ফ্রি পাবলিক প্রক্সি দিয়ে ট্রাই করব
-        try:
-            # একটি ফ্রি প্রক্সি সেটআপ (যা মুভিবক্সের ৪MD ব্লক রিমুভ করবে)
-            os.environ["HTTP_PROXY"] = "http://20.111.54.16:80"  # ব্যাকআপ পাবলিক প্রক্সি আইপি
-            os.environ["HTTPS_PROXY"] = "http://20.111.54.16:80"
-            
-            sess_proxy = Session()
-            if item_type.lower() == 'series' or 'tv' in detail_path.lower():
-                provider = TVSeriesDetails(full_url, session=sess_proxy)
-            else:
-                provider = MovieDetails(full_url, session=sess_proxy)
-                
-            target_movie_details_model = provider.get_content_model_sync()
-            downloadable_files = DownloadableMovieFilesDetail(sess_proxy, target_movie_details_model)
-            downloadable_files_detail = downloadable_files.get_content_sync()
-            
-            return jsonify({
-                "status": "success",
-                "proxy_used": True,
-                "item_type": item_type,
-                "data": downloadable_files_detail
-            })
-        except Exception as proxy_err:
-            return jsonify({
-                "status": "error", 
-                "message": "মুভিবক্স সিকিউরিটির কারণে ভিডিও লিংক জেনারেট করা যাচ্ছে না।",
-                "error_details": str(e),
-                "proxy_error": str(proxy_err)
-            })
+        return jsonify({
+            "status": "error",
+            "message": "সার্ভার ডাটা প্রসেস করতে পারেনি।",
+            "error_details": str(e)
+        })
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
