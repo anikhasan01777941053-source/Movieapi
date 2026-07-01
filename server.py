@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 
-# 🔥 ডাইনামিকালি গিটহাব থেকে লাইব্রেরি ফোল্ডার ডাউনলোড ও সেটআপ করার লজিক
+# ডাইনামিকালি গিটহাব থেকে লাইব্রেরি ফোল্ডার ডাউনলোড ও সেটআপ করার লজিক
 REPO_DIR = "Moviebox_API"
 REPO_URL = "https://github.com/walterwhite-69/Moviebox-API.git"
 
@@ -13,15 +13,14 @@ if not os.path.exists(REPO_DIR):
 # লাইব্রেরির পাথ পাইথনের এনভায়রনমেন্টে যুক্ত করা
 sys.path.append(os.path.abspath(REPO_DIR))
 
-# এখন অফিশিয়ালি ইম্পোর্টগুলো সফলভাবে কাজ করবে
 from flask import Flask, jsonify, request
+
 try:
-    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
     from moviebox_api.v1.requests import Session
 except ImportError:
-    # যদি পাথ স্ট্রাকচার সাবফোল্ডারে থাকে তবে তার ব্যাকআপ হ্যান্ডলিং
     sys.path.append(os.path.abspath(os.path.join(REPO_DIR, "moviebox_api")))
-    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
+    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
     from moviebox_api.v1.requests import Session
 
 app = Flask(__name__)
@@ -75,87 +74,83 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. পারফেক্ট ডাউনলোড ও সিরিজ এপিসোড এপিআই ====================
-
-@app.route('/v1/download', methods=['GET'])
-def get_download_urls():
-    detail_path = request.args.get('path', '')
-    item_type = request.args.get('type', 'movie')
-    season_num = int(request.args.get('se', '1'))     # ইন্টিজারে কনভার্ট করা হলো এপিআই ম্যাচিংয়ের জন্য
-    episode_num = int(request.args.get('ep', '1'))    # ইন্টিজারে কনভার্ট করা হলো
-    
-    if not detail_path:
-        return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
-        
+# ==================== নতুন রুট ১: /detail/{slug} ====================
+@app.route('/detail/<path:slug>', methods=['GET'])
+def get_movie_or_series_detail(slug):
     try:
         sess = Session()
-        full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
-
-        # ১. বেসিক মেটাডাটা প্রসেস করা
-        if item_type.lower() == 'series' or 'tv' in detail_path.lower():
+        full_url = f"/detail/{slug}"
+        
+        # ডিফল্টভাবে মুভি ও সিরিজ দুটোই ট্রাই করবে (ইউআরএল প্যাটার্ন দেখে অটো ডিটেক্ট করবে)
+        if "tv" in slug.lower() or "series" in slug.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        raw_details = provider.get_content_sync()
+        raw_data = provider.get_content_sync()
+        return jsonify(raw_data)
         
-        details_data = {}
-        if isinstance(raw_details, dict):
-            if "resData" in raw_details and isinstance(raw_details["resData"], dict):
-                details_data = raw_details["resData"]
-            else:
-                details_data = raw_details
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
-        subject_id = None
-        if isinstance(details_data, dict):
-            if "subject" in details_data and isinstance(details_data["subject"], dict):
-                subject_id = details_data["subject"].get("subjectId") or details_data["subject"].get("id")
-            if not subject_id and "subjectId" in details_data:
-                subject_id = details_data["subjectId"]
 
-        # ২. ভিডিও ডাউনলোড/প্লে লিংক এক্সট্র্যাকশন লজিক
+# ==================== নতুন রুট ২: /api/stream/{id}?detail_path={slug} ====================
+@app.route('/api/stream/<id>', methods=['GET'])
+def get_stream_link(id):
+    detail_path = request.args.get('detail_path', '')
+    season_num = request.args.get('se', '1')   
+    episode_num = request.args.get('ep', '1')  
+    
+    try:
+        sess = Session()
         downloads_list = []
         
-        if item_type.lower() == 'series' and subject_id:
-            # 🔥 সিরিজের জন্য নির্দিষ্ট সিজন ও এপিসোডের লিংক খোঁজার চেষ্টা
+        # যদি সিরিজ টাইপ কিছু হয় তবে EpisodeDetails স্ক্র্যাপার কল হবে
+        if "tv" in detail_path.lower() or "series" in detail_path.lower():
             try:
-                # walterwhite-69 এপিআই-এর EpisodeDetails বা ডাইনামিক রিকোয়েস্ট লজিক
-                # আমরা সেশন ব্যবহার করে সরাসরি এপিসোডের স্পেসিফিক প্লে-ইনফো হিট করছি
-                ep_url = f"https://api.moviebox.োনি/টাস্ক_অথবা_এপিআই_ইউআরএল" # লাইব্রেরি ইন্টারনাল হ্যান্ডেল করে
-                # ব্যাকআপ হিসেবে আমরা সিজনস ইনফো থেকে ডাটা মেলাবো অথবা ট্রেইলার নেব
-                pass
+                ep_provider = EpisodeDetails(id=str(id), season=int(season_num), episode=int(episode_num), session=sess)
+                ep_raw = ep_provider.get_content_sync()
+                ep_data = ep_raw.get("resData", ep_raw) if isinstance(ep_raw, dict) else {}
+                
+                if isinstance(ep_data, dict) and "videoAddress" in ep_data:
+                    v_addr = ep_data["videoAddress"]
+                    if isinstance(v_addr, dict) and v_addr.get("url"):
+                        downloads_list.append({
+                            "quality": v_addr.get("definition", "HD"),
+                            "url": v_addr.get("url")
+                        })
             except Exception:
                 pass
-
-        # যদি স্পেসিফিক এপিসোড লিংক না পাওয়া যায়, তবে মেটাডাটার মেইন সোর্স চেক করা
-        if not downloads_list and isinstance(details_data, dict):
-            if "videoAddress" in details_data and isinstance(details_data["videoAddress"], dict):
-                v_addr = details_data["videoAddress"]
-                if v_addr.get("url"):
-                    downloads_list.append({"quality": v_addr.get("definition", "HD"), "url": v_addr.get("url")})
+        
+        # যদি মুভি হয় অথবা সিরিজ এপিসোড লিংক না পাওয়া যায়, তবে ব্যাকআপ হিসেবে মুভির মেইন মেটাডাটা থেকে প্লে-লিংক খোঁজা হবে
+        if not downloads_list and detail_path:
+            full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
+            provider = MovieDetails(full_url, session=sess)
+            raw_details = provider.get_content_sync()
+            details_data = raw_details.get("resData", raw_details) if isinstance(raw_details, dict) else {}
             
-            if not downloads_list and "trailer" in details_data and isinstance(details_data["trailer"], dict):
-                t_addr = details_data["trailer"].get("videoAddress", {})
-                if t_addr and t_addr.get("url"):
-                    downloads_list.append({"quality": "Auto/Preview", "url": t_addr.get("url")})
+            if isinstance(details_data, dict):
+                if "videoAddress" in details_data and isinstance(details_data["videoAddress"], dict):
+                    v_addr = details_data["videoAddress"]
+                    if v_addr.get("url"):
+                        downloads_list.append({"quality": v_addr.get("definition", "HD"), "url": v_addr.get("url")})
+                
+                if not downloads_list and "trailer" in details_data and isinstance(details_data["trailer"], dict):
+                    t_addr = details_data["trailer"].get("videoAddress", {})
+                    if t_addr and t_addr.get("url"):
+                        downloads_list.append({"quality": "Auto/Preview", "url": t_addr.get("url")})
 
-        # ৩. ফাইনাল রেসপন্স ডেলিভারি
         return jsonify({
             "status": "success",
-            "item_type": item_type,
-            "subject_id": subject_id or "unknown",
-            "current_season": str(season_num),
-            "current_episode": str(episode_num),
-            "downloads": downloads_list,
-            "seasons_info": details_data.get("resource", {}).get("seasons", []) if isinstance(details_data, dict) else []
+            "id": id,
+            "season": season_num,
+            "episode": episode_num,
+            "streams": downloads_list
         })
-
+        
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": "মেটাডাটা লিঙ্কিং প্রসেস এরর।",
-            "error_details": str(e)
-        })
+        return jsonify({"status": "error", "message": str(e)})
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
