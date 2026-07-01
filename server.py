@@ -2,47 +2,38 @@ import os
 import sys
 import subprocess
 import asyncio
+import importlib.util
 
-# ১. রিপোজিটরি ক্লোন লজিক (সঠিক ডিরেক্টরি নেমিং হ্যান্ডলিং)
+# ১. রিপোজিটরি ক্লোন লজিক
 REPO_DIR_HYPHEN = "Moviebox-API"
-REPO_DIR_UNDERSCORE = "Moviebox_API"
 REPO_URL = "https://github.com/walterwhite-69/Moviebox-API.git"
 
-# যদি কোনো ফোল্ডারই না থাকে, তবে হাইফেন নামে ক্লোন হবে
-if not os.path.exists(REPO_DIR_HYPHEN) and not os.path.exists(REPO_DIR_UNDERSCORE):
+if not os.path.exists(REPO_DIR_HYPHEN):
     try:
         print(f"Cloning dependency from {REPO_URL}...")
         subprocess.run(["git", "clone", REPO_URL, REPO_DIR_HYPHEN], check=True)
     except Exception as e:
         print(f"Clone failed: {e}")
 
-# ২. পাইথনের সিস্টেমে সম্ভাব্য সব ফোল্ডার পাথ যুক্ত করা
-possible_paths = [
-    os.path.abspath(REPO_DIR_HYPHEN),
-    os.path.abspath(REPO_DIR_UNDERSCORE),
-    os.path.abspath(os.path.join(REPO_DIR_HYPHEN, "moviebox_api")),
-    os.path.abspath(os.path.join(REPO_DIR_UNDERSCORE, "moviebox_api"))
-]
+# ২. 🔥 গ্লোবাল মডিউল বাইপাস করে সরাসরি লোকাল api.py ফাইল ফোর্স ইম্পোর্ট করা
+api = None
+target_file_path = os.path.abspath(os.path.join(REPO_DIR_HYPHEN, "api.py"))
 
-for path in possible_paths:
-    if os.path.exists(path) and path not in sys.path:
-        sys.path.append(path)
+if os.path.exists(target_file_path):
+    try:
+        # ফাইলের ডিরেক্ট পাথ থেকে মডিউল স্পেক তৈরি করা
+        spec = importlib.util.spec_from_file_location("local_api", target_file_path)
+        api = importlib.util.module_from_spec(spec)
+        # সিস্টেমে মডিউলটি রেজিস্টার করা যেন ভেতরের লোকাল ফাইলগুলো একে অপরকে পায়
+        sys.modules["local_api"] = api
+        spec.loader.exec_module(api)
+        print("Success: Locally forced api.py loaded successfully!")
+    except Exception as imp_err:
+        print(f"Forced import failed: {imp_err}")
+else:
+    print(f"Critical Error: api.py not found at {target_file_path}")
 
 from flask import Flask, jsonify, request
-
-# api.py থেকে সরাসরি ফাংশনগুলো সেফলি ইম্পোর্ট করা
-try:
-    import api
-except ImportError:
-    # যদি ডিরেক্টলি ইম্পোর্ট না পায়, তবে মডিউল পাথ ধরে ফোর্স ইম্পোর্ট ট্রাই করা
-    try:
-        from Moviebox_API import api
-    except ImportError:
-        try:
-            import moviebox_api as api
-        except ImportError:
-            print("Critical: api.py not found in path")
-            api = None
 
 app = Flask(__name__)
 
