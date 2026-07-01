@@ -2,36 +2,52 @@ import os
 import sys
 import subprocess
 
-# ডাইনামিকালি গিটহাব থেকে লাইব্রেরি ফোল্ডার ডাউনলোড ও সেটআপ করার লজিক
+# ১. রিপোজিটরি ফোল্ডার চেক ও ক্লোন লজিক (আরও নিখুঁতভাবে হ্যান্ডেল করা হয়েছে)
 REPO_DIR = "Moviebox_API"
 REPO_URL = "https://github.com/walterwhite-69/Moviebox-API.git"
 
 if not os.path.exists(REPO_DIR):
-    print(f"Cloning dependency from {REPO_URL}...")
-    subprocess.run(["git", "clone", REPO_URL, REPO_DIR], check=True)
+    try:
+        print(f"Cloning dependency from {REPO_URL}...")
+        subprocess.run(["git", "clone", REPO_URL, REPO_DIR], check=True)
+    except Exception as clone_err:
+        print(f"Git clone failed: {clone_err}")
 
-# লাইব্রেরির পাথ পাইথনের এনভায়রনমেন্টে যুক্ত করা
-sys.path.append(os.path.abspath(REPO_DIR))
+# পাইথনের পাথে ফোল্ডারটি যুক্ত করা
+base_path = os.path.abspath(REPO_DIR)
+if base_path not in sys.path:
+    sys.path.append(base_path)
 
 from flask import Flask, jsonify, request
 
+# ২. ট্রাই-ক্যাচ ব্লক দিয়ে মেটাডাটা ক্লাস ইম্পোর্ট (যাতে ইম্পোর্ট এররে গুনিকর্ন ক্র্যাশ না করে)
 try:
     from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
     from moviebox_api.v1.requests import Session
 except ImportError:
-    sys.path.append(os.path.abspath(os.path.join(REPO_DIR, "moviebox_api")))
-    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
-    from moviebox_api.v1.requests import Session
+    # ব্যাকআপ সাব-পাথ যুক্ত করা (যদি ডিরেক্টরি লেভেল আলাদা হয়)
+    sub_path = os.path.abspath(os.path.join(REPO_DIR, "moviebox_api"))
+    if sub_path not in sys.path:
+        sys.path.append(sub_path)
+    try:
+        from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
+        from moviebox_api.v1.requests import Session
+    except ImportError as final_err:
+        print(f"Critical Import Error: {final_err}")
+        # যাতে সার্ভার ক্র্যাশ না করে ডামি ক্লাস ডিফাইন করে রাখা
+        Homepage = Search = MovieDetails = TVSeriesDetails = EpisodeDetails = Session = None
 
 app = Flask(__name__)
 
 def get_homepage_raw_data():
+    if not Homepage: return {"error": "API library not loaded properly"}
     hp = Homepage()
     return hp.get_content_sync()
 
 def get_items_by_index(index_num):
     try:
         raw_json = get_homepage_raw_data()
+        if "error" in raw_json: return {"status": "error", "message": raw_json["error"]}
         operating_list = raw_json.get("operatingList", [])
         if len(operating_list) > index_num:
             section = operating_list[index_num]
@@ -47,6 +63,7 @@ def get_items_by_index(index_num):
 def get_homepage_banner():
     try:
         raw_json = get_homepage_raw_data()
+        if isinstance(raw_json, dict) and "error" in raw_json: return jsonify(raw_json)
         banner_data = raw_json.get("banner", {})
         items = banner_data.get("items", []) if banner_data else []
         return jsonify({"status": "success", "count": len(items), "data": items})
@@ -66,6 +83,7 @@ def get_homepage_popular(): return jsonify(get_items_by_index(3))
 
 @app.route('/v1/search', methods=['GET'])
 def search_v1():
+    if not Search: return jsonify({"status": "error", "message": "API library missing"})
     q = request.args.get('q', '')
     if not q: return jsonify({"status": "error", "message": "Query parameter 'q' is missing"})
     try:
@@ -77,11 +95,11 @@ def search_v1():
 # ==================== নতুন রুট ১: /detail/{slug} ====================
 @app.route('/detail/<path:slug>', methods=['GET'])
 def get_movie_or_series_detail(slug):
+    if not MovieDetails: return jsonify({"status": "error", "message": "API library missing"})
     try:
         sess = Session()
         full_url = f"/detail/{slug}"
         
-        # ডিফল্টভাবে মুভি ও সিরিজ দুটোই ট্রাই করবে (ইউআরএল প্যাটার্ন দেখে অটো ডিটেক্ট করবে)
         if "tv" in slug.lower() or "series" in slug.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
@@ -89,7 +107,6 @@ def get_movie_or_series_detail(slug):
             
         raw_data = provider.get_content_sync()
         return jsonify(raw_data)
-        
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -97,6 +114,7 @@ def get_movie_or_series_detail(slug):
 # ==================== নতুন রুট ২: /api/stream/{id}?detail_path={slug} ====================
 @app.route('/api/stream/<id>', methods=['GET'])
 def get_stream_link(id):
+    if not EpisodeDetails: return jsonify({"status": "error", "message": "API library missing"})
     detail_path = request.args.get('detail_path', '')
     season_num = request.args.get('se', '1')   
     episode_num = request.args.get('ep', '1')  
@@ -105,7 +123,6 @@ def get_stream_link(id):
         sess = Session()
         downloads_list = []
         
-        # যদি সিরিজ টাইপ কিছু হয় তবে EpisodeDetails স্ক্র্যাপার কল হবে
         if "tv" in detail_path.lower() or "series" in detail_path.lower():
             try:
                 ep_provider = EpisodeDetails(id=str(id), season=int(season_num), episode=int(episode_num), session=sess)
@@ -122,7 +139,6 @@ def get_stream_link(id):
             except Exception:
                 pass
         
-        # যদি মুভি হয় অথবা সিরিজ এপিসোড লিংক না পাওয়া যায়, তবে ব্যাকআপ হিসেবে মুভির মেইন মেটাডাটা থেকে প্লে-লিংক খোঁজা হবে
         if not downloads_list and detail_path:
             full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
             provider = MovieDetails(full_url, session=sess)
@@ -147,7 +163,6 @@ def get_stream_link(id):
             "episode": episode_num,
             "streams": downloads_list
         })
-        
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
