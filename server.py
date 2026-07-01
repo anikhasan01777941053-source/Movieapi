@@ -55,14 +55,14 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. স্মার্ট ভিডিও এপিআই (মুভি + স্পেসিফিক এপিসোড ডিকোডার) ====================
+# ==================== ৩. ফিক্সড ভিডিও ডাউনলোড ও প্লে-লিংক এপিআই ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
     detail_path = request.args.get('path', '')
     item_type = request.args.get('type', 'movie')
-    season_num = request.args.get('se', '1')   # অ্যাপ থেকে পাঠানো সিজন (ডিফল্ট ১)
-    episode_num = request.args.get('ep', '1')  # অ্যাপ থেকে পাঠানো এপিসোড (ডিফল্ট ১)
+    season_num = request.args.get('se', '1')   
+    episode_num = request.args.get('ep', '1')  
     
     if not detail_path:
         return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
@@ -71,7 +71,7 @@ def get_download_urls():
         sess = Session()
         full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
 
-        # ১. প্রথমে মেটাডাটা থেকে মূল 'subjectId' বের করা
+        # ১. মেটাডাটা অবজেক্ট ফেচ করা
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
@@ -79,20 +79,27 @@ def get_download_urls():
             
         details_data = provider.get_content_sync()
         
-        # জেসন স্ট্রাকচার থেকে সুক্ষ্মভাবে subjectId খুঁজে বের করা
+        # ২. জেসনের সব লেভেল থেকে নিখুঁতভাবে subjectId খুঁজে বের করার ফিক্সড লজিক
         subject_id = None
-        if "subjectId" in details_data:
-            subject_id = details_data["subjectId"]
-        elif "subject" in details_data and isinstance(details_data["subject"], dict):
-            subject_id = details_data["subject"].get("subjectId")
+        if isinstance(details_data, dict):
+            if "subjectId" in details_data and details_data["subjectId"]:
+                subject_id = details_data["subjectId"]
+            elif "subject" in details_data and isinstance(details_data["subject"], dict):
+                subject_id = details_data["subject"].get("subjectId") or details_data["subject"].get("id")
+            elif "id" in details_data:
+                subject_id = details_data["id"]
 
+        # যদি কোনোভাবেই আইডি না পাওয়া যায়, তবে ম্যানুয়ালি চেক করার জন্য ডাটা রিটার্ন করা
         if not subject_id:
-            return jsonify({"status": "error", "message": "Subject ID পাওয়া যায়নি।", "full_data": details_data})
+            return jsonify({
+                "status": "error", 
+                "message": "Subject ID পাওয়া যায়নি। জেসন ফরম্যাট পরিবর্তন হয়েছে।", 
+                "debug_keys": list(details_data.keys()) if isinstance(details_data, dict) else "Not a dict"
+            })
 
-        # ২. মুভিবক্সের আসল ইন্টারনাল ভিডিও এপিআই টার্গেট করা (ইনজেক্টিং রিয়েল প্যারামস)
+        # ৩. মুভিবক্স ডাউনলোড এপিআই কল (উইথ ফিক্সড আইডি)
         target_api = f"https://h5.aoneroom.com/wefeed-h5-bff/web/subject/download?subjectId={subject_id}&se={season_num}&ep={episode_num}"
         
-        # মুভিবক্স অ্যাপের সিকিউরিটি গেটওয়ে বাইপাস করার জন্য ৩টি সিগনেচার হেডার
         web_headers = {
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
             "Referer": "https://fmoviesunblocked.net/",
@@ -101,12 +108,10 @@ def get_download_urls():
             "Accept": "application/json, text/plain, */*"
         }
 
-        # সার্ভার-টু-সার্ভার রিকোয়েস্টে ডিরেক্ট ডাটা ফেচিং
         with httpx.Client(headers=web_headers, timeout=15.0, follow_redirects=True) as client:
             res = client.get(target_api)
             api_data = res.json()
 
-        # ৩. যদি মুভিবক্স ভিডিও ডাটা দিয়ে দেয়, তবে সেটা রেসপন্স করা
         video_info = api_data.get("data", {})
         if video_info.get("downloads") or video_info.get("hasResource"):
             return jsonify({
@@ -119,10 +124,10 @@ def get_download_urls():
                 "captions": video_info.get("captions", [])
             })
 
-        # ৪. ব্যাকআপ প্ল্যান: যদি এপিআই ফাঁকা দেয়, তবে ট্রেইলার/প্রিভিউ লিংক পাঠিয়ে দেওয়া
+        # ৪. ব্যাকআপ সেকশন (যদি কোনো ডাউনলোড লিংক জেনারেট না হয়)
         backup_downloads = []
-        if "trailer" in details_data and details_data["trailer"]:
-            t_addr = details_data["trailer"].get("videoAddress", {})
+        if isinstance(details_data, dict) and "trailer" in details_data and details_data["trailer"]:
+            t_addr = details_data["trailer"].get("videoAddress", {}) if isinstance(details_data["trailer"], dict) else {}
             if t_addr and t_addr.get("url"):
                 backup_downloads.append({
                     "definition": "Preview/Trailer",
@@ -134,13 +139,13 @@ def get_download_urls():
             "note": "Bypassed via metadata fallback",
             "subject_id": subject_id,
             "downloads": backup_downloads,
-            "seasons_info": details_data.get("resource", {}).get("seasons", [])
+            "seasons_info": details_data.get("resource", {}).get("seasons", []) if isinstance(details_data, dict) else []
         })
 
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": "ভিডিও লিংক প্রসেস করার সময় কোনো সমস্যা হয়েছে।",
+            "message": "সার্ভার ইন্টারনাল এরর ফেস করেছে।",
             "error_details": str(e)
         })
 
