@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 
-# ১. রিপোজিটরি ফোল্ডার চেক ও ক্লোন লজিক (আরও নিখুঁতভাবে হ্যান্ডেল করা হয়েছে)
+# ১. রিপোজিটরি ফোল্ডার চেক ও ক্লোন লজিক
 REPO_DIR = "Moviebox_API"
 REPO_URL = "https://github.com/walterwhite-69/Moviebox-API.git"
 
@@ -20,22 +20,20 @@ if base_path not in sys.path:
 
 from flask import Flask, jsonify, request
 
-# ২. ট্রাই-ক্যাচ ব্লক দিয়ে মেটাডাটা ক্লাস ইম্পোর্ট (যাতে ইম্পোর্ট এররে গুনিকর্ন ক্র্যাশ না করে)
+# ২. ট্রাই-ক্যাচ ব্লক দিয়ে সঠিক ক্লাসগুলো ইম্পোর্ট করা (EpisodeDetails বাদ দেওয়া হয়েছে)
 try:
-    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
+    from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
     from moviebox_api.v1.requests import Session
 except ImportError:
-    # ব্যাকআপ সাব-পাথ যুক্ত করা (যদি ডিরেক্টরি লেভেল আলাদা হয়)
     sub_path = os.path.abspath(os.path.join(REPO_DIR, "moviebox_api"))
     if sub_path not in sys.path:
         sys.path.append(sub_path)
     try:
-        from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails, EpisodeDetails
+        from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
         from moviebox_api.v1.requests import Session
     except ImportError as final_err:
         print(f"Critical Import Error: {final_err}")
-        # যাতে সার্ভার ক্র্যাশ না করে ডামি ক্লাস ডিফাইন করে রাখা
-        Homepage = Search = MovieDetails = TVSeriesDetails = EpisodeDetails = Session = None
+        Homepage = Search = MovieDetails = TVSeriesDetails = Session = None
 
 app = Flask(__name__)
 
@@ -47,7 +45,7 @@ def get_homepage_raw_data():
 def get_items_by_index(index_num):
     try:
         raw_json = get_homepage_raw_data()
-        if "error" in raw_json: return {"status": "error", "message": raw_json["error"]}
+        if isinstance(raw_json, dict) and "error" in raw_json: return {"status": "error", "message": raw_json["error"]}
         operating_list = raw_json.get("operatingList", [])
         if len(operating_list) > index_num:
             section = operating_list[index_num]
@@ -114,7 +112,6 @@ def get_movie_or_series_detail(slug):
 # ==================== নতুন রুট ২: /api/stream/{id}?detail_path={slug} ====================
 @app.route('/api/stream/<id>', methods=['GET'])
 def get_stream_link(id):
-    if not EpisodeDetails: return jsonify({"status": "error", "message": "API library missing"})
     detail_path = request.args.get('detail_path', '')
     season_num = request.args.get('se', '1')   
     episode_num = request.args.get('ep', '1')  
@@ -123,25 +120,38 @@ def get_stream_link(id):
         sess = Session()
         downloads_list = []
         
+        # ১. সিরিজের ক্ষেত্রে ডাইনামিক সাবজেক্ট এপিআই রিকোয়েস্ট ফায়ার করা (উইদাউট EpisodeDetails ক্লাস)
         if "tv" in detail_path.lower() or "series" in detail_path.lower():
             try:
-                ep_provider = EpisodeDetails(id=str(id), season=int(season_num), episode=int(episode_num), session=sess)
-                ep_raw = ep_provider.get_content_sync()
-                ep_data = ep_raw.get("resData", ep_raw) if isinstance(ep_raw, dict) else {}
+                target_api = f"https://h5.aoneroom.com/wefeed-h5-bff/web/subject/play-info?subjectId={id}&seasonNum={season_num}&episodeNum={episode_num}"
+                web_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    "Referer": "https://h5.aoneroom.com/",
+                    "Origin": "https://h5.aoneroom.com",
+                    "Accept": "application/json, text/plain, */*"
+                }
+                # সেশন ব্যবহার করে সেফ কল করা
+                res = sess.get(target_api, headers=web_headers)
+                api_data = res.json() if hasattr(res, 'json') else {}
+                play_info = api_data.get("data", {})
                 
-                if isinstance(ep_data, dict) and "videoAddress" in ep_data:
-                    v_addr = ep_data["videoAddress"]
-                    if isinstance(v_addr, dict) and v_addr.get("url"):
-                        downloads_list.append({
-                            "quality": v_addr.get("definition", "HD"),
-                            "url": v_addr.get("url")
-                        })
+                if play_info.get("playAddress"):
+                    addr = play_info["playAddress"]
+                    downloads_list.append({"quality": addr.get("definition", "HD"), "url": addr.get("url")})
+                elif play_info.get("videoAddress"):
+                    addr = play_info["videoAddress"]
+                    downloads_list.append({"quality": addr.get("definition", "HD"), "url": addr.get("url")})
             except Exception:
                 pass
         
+        # ২. ব্যাকআপ হিসেবে মুভি বা র মেটাডাটা থেকে ট্রেইলার/মেন লিংক চেক করা
         if not downloads_list and detail_path:
             full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
-            provider = MovieDetails(full_url, session=sess)
+            if "tv" in detail_path.lower() or "series" in detail_path.lower():
+                provider = TVSeriesDetails(full_url, session=sess)
+            else:
+                provider = MovieDetails(full_url, session=sess)
+                
             raw_details = provider.get_content_sync()
             details_data = raw_details.get("resData", raw_details) if isinstance(raw_details, dict) else {}
             
