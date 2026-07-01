@@ -1,13 +1,3 @@
-flask
-gunicorn
-click
-httpx
-rich
-pydantic
-prompt_toolkit
-throttlebuster
-beautifulsoup4
-strenum
 Flask==3.0.2
 httpx==0.27.0
 git+https://github.com/walterwhite-69/Moviebox-API.git
