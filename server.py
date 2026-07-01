@@ -55,7 +55,7 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. ফিক্সড ভিডিও ডাউনলোড ও প্লে-লিংক এপিআই ====================
+# ==================== ৩. সুপার ফিক্সড ডাউনলোড এপিআই ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
@@ -71,33 +71,41 @@ def get_download_urls():
         sess = Session()
         full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
 
-        # ১. মেটাডাটা অবজেক্ট ফেচ করা
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
             provider = MovieDetails(full_url, session=sess)
             
-        details_data = provider.get_content_sync()
+        raw_details = provider.get_content_sync()
         
-        # ২. জেসনের সব লেভেল থেকে নিখুঁতভাবে subjectId খুঁজে বের করার ফিক্সড লজিক
+        # ১. জেসন যদি স্ট্রিং বা অন্য কিছু না হয়ে ডিকশনারি হয়, তবে 'resData' আলাদা করা
+        details_data = {}
+        if isinstance(raw_details, dict):
+            if "resData" in raw_details and isinstance(raw_details["resData"], dict):
+                details_data = raw_details["resData"]
+            else:
+                details_data = raw_details
+
+        # ২. এখন resData-র ভেতর থেকে নিখুঁতভাবে subjectId বের করার ইউনিভার্সাল লজিক
         subject_id = None
         if isinstance(details_data, dict):
-            if "subjectId" in details_data and details_data["subjectId"]:
-                subject_id = details_data["subjectId"]
-            elif "subject" in details_data and isinstance(details_data["subject"], dict):
+            if "subject" in details_data and isinstance(details_data["subject"], dict):
                 subject_id = details_data["subject"].get("subjectId") or details_data["subject"].get("id")
-            elif "id" in details_data:
+            if not subject_id and "subjectId" in details_data:
+                subject_id = details_data["subjectId"]
+            if not subject_id and "id" in details_data:
                 subject_id = details_data["id"]
 
-        # যদি কোনোভাবেই আইডি না পাওয়া যায়, তবে ম্যানুয়ালি চেক করার জন্য ডাটা রিটার্ন করা
+        # যদি তাও না পাওয়া যায়, তবে সেভ মুডে পুরো ডিকশনারি রিটার্ন করবে চেকিংয়ের জন্য
         if not subject_id:
             return jsonify({
                 "status": "error", 
-                "message": "Subject ID পাওয়া যায়নি। জেসন ফরম্যাট পরিবর্তন হয়েছে।", 
-                "debug_keys": list(details_data.keys()) if isinstance(details_data, dict) else "Not a dict"
+                "message": "Subject ID খুঁজে পাওয়া যায়নি।", 
+                "resData_keys": list(details_data.keys()) if isinstance(details_data, dict) else "Not a dict",
+                "raw_response_keys": list(raw_details.keys()) if isinstance(raw_details, dict) else "Raw response not dict"
             })
 
-        # ৩. মুভিবক্স ডাউনলোড এপিআই কল (উইথ ফিক্সড আইডি)
+        # ৩. মুভিবক্স আসল ডাউনলোড এপিআই ফায়ার করা
         target_api = f"https://h5.aoneroom.com/wefeed-h5-bff/web/subject/download?subjectId={subject_id}&se={season_num}&ep={episode_num}"
         
         web_headers = {
@@ -124,7 +132,7 @@ def get_download_urls():
                 "captions": video_info.get("captions", [])
             })
 
-        # ৪. ব্যাকআপ সেকশন (যদি কোনো ডাউনলোড লিংক জেনারেট না হয়)
+        # ৪. ট্রেইলার ব্যাকআপ লজিক
         backup_downloads = []
         if isinstance(details_data, dict) and "trailer" in details_data and details_data["trailer"]:
             t_addr = details_data["trailer"].get("videoAddress", {}) if isinstance(details_data["trailer"], dict) else {}
@@ -136,7 +144,7 @@ def get_download_urls():
 
         return jsonify({
             "status": "success",
-            "note": "Bypassed via metadata fallback",
+            "note": "Fallback to metadata structure",
             "subject_id": subject_id,
             "downloads": backup_downloads,
             "seasons_info": details_data.get("resource", {}).get("seasons", []) if isinstance(details_data, dict) else []
@@ -145,7 +153,7 @@ def get_download_urls():
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": "সার্ভার ইন্টারনাল এরর ফেস করেছে।",
+            "message": "ক্রিটিক্যাল সার্ভার এরর!",
             "error_details": str(e)
         })
 
