@@ -55,14 +55,14 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. ১০০% ওয়ার্কিং ভিডিও লিংক ডিকোডার ====================
+# ==================== ৩. ফিক্সড ডাউনলোড ও মেটাডাটা এপিআই ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
     detail_path = request.args.get('path', '')
     item_type = request.args.get('type', 'movie')
-    season_num = int(request.args.get('se', '1'))   
-    episode_num = int(request.args.get('ep', '1'))  
+    season_num = request.args.get('se', '1')   
+    episode_num = request.args.get('ep', '1')  
     
     if not detail_path:
         return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
@@ -78,6 +78,7 @@ def get_download_urls():
             
         raw_details = provider.get_content_sync()
         
+        # ১. resData কনটেইনার আনপ্যাকিং (সবচেয়ে গুরুত্বপূর্ণ পার্ট)
         details_data = {}
         if isinstance(raw_details, dict):
             if "resData" in raw_details and isinstance(raw_details["resData"], dict):
@@ -85,86 +86,42 @@ def get_download_urls():
             else:
                 details_data = raw_details
 
+        # ২. সাবজেক্ট আইডি এক্সট্র্যাকশন
         subject_id = None
         if isinstance(details_data, dict):
             if "subject" in details_data and isinstance(details_data["subject"], dict):
                 subject_id = details_data["subject"].get("subjectId") or details_data["subject"].get("id")
             if not subject_id and "subjectId" in details_data:
                 subject_id = details_data["subjectId"]
-            if not subject_id and "id" in details_data:
-                subject_id = details_data["id"]
 
-        if not subject_id:
-            return jsonify({"status": "error", "message": "Subject ID খুঁজে পাওয়া যায়নি।"})
-
-        # 🔥 মুভিবক্সের আনব্লকড ও অফিশিয়াল প্লে-লিংক এপিআই রুট (এটি সরাসরি কাজ করে)
-        target_api = f"https://h5.aoneroom.com/wefeed-h5-bff/web/subject/play-info?subjectId={subject_id}&seasonNum={season_num}&episodeNum={episode_num}"
-        
-        web_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Referer": "https://h5.aoneroom.com/",
-            "Origin": "https://h5.aoneroom.com",
-            "Accept": "application/json, text/plain, */*"
-        }
-
-        with httpx.Client(headers=web_headers, timeout=15.0, follow_redirects=True) as client:
-            res = client.get(target_api)
-            api_data = res.json()
-
-        # মুভিবক্স অনেক সময় 'playAddress' বা 'videoAddress' হিসেবে রেসপন্স দেয়, আমরা দুটোই চেক করব
-        play_info = api_data.get("data", {})
+        # ৩. সোর্স ও প্রিভিউ লিংক প্রসেসিং
         downloads_list = []
+        if isinstance(details_data, dict):
+            if "videoAddress" in details_data and isinstance(details_data["videoAddress"], dict):
+                v_addr = details_data["videoAddress"]
+                if v_addr.get("url"):
+                    downloads_list.append({"quality": v_addr.get("definition", "HD"), "url": v_addr.get("url")})
+            
+            if not downloads_list and "trailer" in details_data and isinstance(details_data["trailer"], dict):
+                t_addr = details_data["trailer"].get("videoAddress", {})
+                if t_addr and t_addr.get("url"):
+                    downloads_list.append({"quality": "Auto/Preview", "url": t_addr.get("url")})
 
-        # যদি প্লে এড্রেস অবজেক্ট ডিরেক্ট থাকে
-        if play_info.get("playAddress"):
-            addr = play_info["playAddress"]
-            downloads_list.append({
-                "quality": addr.get("definition", "HD"),
-                "url": addr.get("url")
-            })
-        
-        # ব্যাকআপ হিসেবে যদি এপিআই-র ভেতরে ডাউনলোড বা সোর্স লিংক থাকে
-        elif play_info.get("videoAddress"):
-            addr = play_info["videoAddress"]
-            downloads_list.append({
-                "quality": addr.get("definition", "HD"),
-                "url": addr.get("url")
-            })
-
-        # যদি প্লে-ইনফো এপিআই থেকে ডাটা সাকসেসফুলি চলে আসে
-        if downloads_list and downloads_list[0]["url"]:
-            return jsonify({
-                "status": "success",
-                "item_type": item_type,
-                "subject_id": subject_id,
-                "current_season": season_num,
-                "current_episode": episode_num,
-                "downloads": downloads_list,
-                "captions": play_info.get("captions", [])
-            })
-
-        # ওল্ড ব্যাকআপ লজিক (ইন কেস প্লে-ইনফো ফাঁকা দিলে ট্রেইলার দেখাবে)
-        backup_downloads = []
-        if isinstance(details_data, dict) and "trailer" in details_data and details_data["trailer"]:
-            t_addr = details_data["trailer"].get("videoAddress", {}) if isinstance(details_data["trailer"], dict) else {}
-            if t_addr and t_addr.get("url"):
-                backup_downloads.append({
-                    "quality": "Preview/Trailer",
-                    "url": t_addr.get("url")
-                })
-
+        # ৪. ফাইনাল ডেলিভারি রেসপন্স
         return jsonify({
             "status": "success",
-            "note": "Play-info returned empty, showing raw structure",
-            "subject_id": subject_id,
-            "downloads": backup_downloads,
+            "item_type": item_type,
+            "subject_id": subject_id or "unknown",
+            "current_season": season_num,
+            "current_episode": episode_num,
+            "downloads": downloads_list,
             "seasons_info": details_data.get("resource", {}).get("seasons", []) if isinstance(details_data, dict) else []
         })
 
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": "সার্ভার ভিডিও লিংক প্রসেস করতে পারেনি।",
+            "message": "WalterWhite-69 API এর সাথে মেটাডাটা পার্সিং এরর হয়েছে।",
             "error_details": str(e)
         })
 
