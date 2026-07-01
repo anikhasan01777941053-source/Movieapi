@@ -1,3 +1,2 @@
 Flask==3.0.2
 httpx==0.27.0
-git+https://github.com/walterwhite-69/Moviebox-API.git
