@@ -1,4 +1,5 @@
 import os
+import httpx
 from flask import Flask, jsonify, request
 from moviebox_api.v1.core import Homepage, Search, MovieDetails, TVSeriesDetails
 from moviebox_api.v1.requests import Session
@@ -22,7 +23,7 @@ def get_items_by_index(index_num):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# ==================== ১. হোমপেজ ক্যাটাগরি সমূহ ====================
+# ==================== হোমপেজ ও সার্চ রুটস ====================
 @app.route('/v1/homepage/banner', methods=['GET'])
 def get_homepage_banner():
     try:
@@ -44,7 +45,6 @@ def get_homepage_hotshort(): return jsonify(get_items_by_index(2))
 @app.route('/v1/homepage/popular', methods=['GET'])
 def get_homepage_popular(): return jsonify(get_items_by_index(3))
 
-# ==================== ২. মুভি ও সিরিজ সার্চ ====================
 @app.route('/v1/search', methods=['GET'])
 def search_v1():
     q = request.args.get('q', '')
@@ -55,12 +55,14 @@ def search_v1():
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== ৩. ভিডিও ডাউনলোড ও প্লে-লিংক জেনারেটর ====================
+# ==================== ৩. স্মার্ট ভিডিও এপিআই (মুভি + স্পেসিফিক এপিসোড ডিকোডার) ====================
 
 @app.route('/v1/download', methods=['GET'])
 def get_download_urls():
     detail_path = request.args.get('path', '')
     item_type = request.args.get('type', 'movie')
+    season_num = request.args.get('se', '1')   # অ্যাপ থেকে পাঠানো সিজন (ডিফল্ট ১)
+    episode_num = request.args.get('ep', '1')  # অ্যাপ থেকে পাঠানো এপিসোড (ডিফল্ট ১)
     
     if not detail_path:
         return jsonify({"status": "error", "message": "Parameter 'path' is missing"})
@@ -69,7 +71,7 @@ def get_download_urls():
         sess = Session()
         full_url = detail_path if detail_path.startswith("http") or detail_path.startswith("/detail") else f"/detail/{detail_path}"
 
-        # মুভি বা সিরিজ অনুযায়ী মেইন ডিটেইলস ডাটা তুলে আনা
+        # ১. প্রথমে মেটাডাটা থেকে মূল 'subjectId' বের করা
         if item_type.lower() == 'series' or 'tv' in detail_path.lower():
             provider = TVSeriesDetails(full_url, session=sess)
         else:
@@ -77,55 +79,68 @@ def get_download_urls():
             
         details_data = provider.get_content_sync()
         
-        # আমাদের নিজস্ব স্ট্রাকচারড রেসপন্স তৈরি করা যা স্কেচওয়্যারে সহজে পার্স করা যাবে
-        video_links = []
-        
-        # ১. মুভির ক্ষেত্রে যদি সরাসরি ডিরেক্ট প্লে লিংক (videoAddress) থাকে
-        if "videoAddress" in details_data and details_data["videoAddress"]:
-            v_addr = details_data["videoAddress"]
-            if v_addr.get("url"):
-                video_links.append({
-                    "quality": f"{v_addr.get('definition', 'Default')} (Movie)",
-                    "url": v_addr.get("url"),
-                    "size": v_addr.get("size", 0)
-                })
-                
-        # ২. ট্রেইলার বা প্রিভিউ লিংক যদি থাকে সেটাও ব্যাকআপ হিসেবে অ্যাড করা
-        if "trailer" in details_data and details_data["trailer"]:
-            trailer_data = details_data["trailer"]
-            # যদি এর ভেতরেও কোনো ভিডিও অ্যাড্রেস থাকে
-            if isinstance(trailer_data, dict) and trailer_data.get("videoAddress"):
-                t_addr = trailer_data["videoAddress"]
-                if t_addr.get("url"):
-                    video_links.append({
-                        "quality": "Preview / Trailer",
-                        "url": t_addr.get("url"),
-                        "size": t_addr.get("size", 0)
-                    })
+        # জেসন স্ট্রাকচার থেকে সুক্ষ্মভাবে subjectId খুঁজে বের করা
+        subject_id = None
+        if "subjectId" in details_data:
+            subject_id = details_data["subjectId"]
+        elif "subject" in details_data and isinstance(details_data["subject"], dict):
+            subject_id = details_data["subject"].get("subjectId")
 
-        # যদি কোনো লিংক খুঁজে পায়
-        if video_links:
+        if not subject_id:
+            return jsonify({"status": "error", "message": "Subject ID পাওয়া যায়নি।", "full_data": details_data})
+
+        # ২. মুভিবক্সের আসল ইন্টারনাল ভিডিও এপিআই টার্গেট করা (ইনজেক্টিং রিয়েল প্যারামস)
+        target_api = f"https://h5.aoneroom.com/wefeed-h5-bff/web/subject/download?subjectId={subject_id}&se={season_num}&ep={episode_num}"
+        
+        # মুভিবক্স অ্যাপের সিকিউরিটি গেটওয়ে বাইপাস করার জন্য ৩টি সিগনেচার হেডার
+        web_headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+            "Referer": "https://fmoviesunblocked.net/",
+            "Origin": "https://h5.aoneroom.com",
+            "Platform": "web",
+            "Accept": "application/json, text/plain, */*"
+        }
+
+        # সার্ভার-টু-সার্ভার রিকোয়েস্টে ডিরেক্ট ডাটা ফেচিং
+        with httpx.Client(headers=web_headers, timeout=15.0, follow_redirects=True) as client:
+            res = client.get(target_api)
+            api_data = res.json()
+
+        # ৩. যদি মুভিবক্স ভিডিও ডাটা দিয়ে দেয়, তবে সেটা রেসপন্স করা
+        video_info = api_data.get("data", {})
+        if video_info.get("downloads") or video_info.get("hasResource"):
             return jsonify({
                 "status": "success",
                 "item_type": item_type,
-                "has_video": True,
-                "downloads": video_links,
-                "full_data": details_data  # ব্যাকআপ হিসেবে পুরো জেসনও থাকলো
+                "subject_id": subject_id,
+                "current_season": season_num,
+                "current_episode": episode_num,
+                "downloads": video_info.get("downloads", []),
+                "captions": video_info.get("captions", [])
             })
-            
-        # কোনো কারণে ডিরেক্ট লিংক রেডি না থাকলে সেফ জেসন রেসপন্স পাঠানো
+
+        # ৪. ব্যাকআপ প্ল্যান: যদি এপিআই ফাঁকা দেয়, তবে ট্রেইলার/প্রিভিউ লিংক পাঠিয়ে দেওয়া
+        backup_downloads = []
+        if "trailer" in details_data and details_data["trailer"]:
+            t_addr = details_data["trailer"].get("videoAddress", {})
+            if t_addr and t_addr.get("url"):
+                backup_downloads.append({
+                    "definition": "Preview/Trailer",
+                    "url": t_addr.get("url")
+                })
+
         return jsonify({
             "status": "success",
-            "item_type": item_type,
-            "has_video": False,
-            "downloads": [],
-            "full_data": details_data
+            "note": "Bypassed via metadata fallback",
+            "subject_id": subject_id,
+            "downloads": backup_downloads,
+            "seasons_info": details_data.get("resource", {}).get("seasons", [])
         })
-        
+
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": "সার্ভার ডাটা প্রসেস করতে পারেনি।",
+            "message": "ভিডিও লিংক প্রসেস করার সময় কোনো সমস্যা হয়েছে।",
             "error_details": str(e)
         })
 
