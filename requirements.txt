@@ -8,3 +8,5 @@ prompt_toolkit
 throttlebuster
 beautifulsoup4
 strenum
+uvicorn
+fastapi
