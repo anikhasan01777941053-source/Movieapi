@@ -2,7 +2,6 @@ import os
 import sys
 import subprocess
 import asyncio
-import importlib.util
 
 # ১. রিপোজিটরি ক্লোন লজিক
 REPO_DIR_HYPHEN = "Moviebox-API"
@@ -15,29 +14,23 @@ if not os.path.exists(REPO_DIR_HYPHEN):
     except Exception as e:
         print(f"Clone failed: {e}")
 
-# ২. 🔥 গ্লোবাল মডিউল বাইপাস করে সরাসরি লোকাল api.py ফাইল ফোর্স ইম্পোর্ট করা
-api = None
-target_file_path = os.path.abspath(os.path.join(REPO_DIR_HYPHEN, "api.py"))
+# ২. 🔥 গ্লোবাল মডিউল কনফ্লিক্ট এড়াতে sys.path এর একদম শুরুতে (0 নম্বর ইনডেক্সে) পাথ ইনসার্ট করা
+local_repo_path = os.path.abspath(REPO_DIR_HYPHEN)
+if local_repo_path in sys.path:
+    sys.path.remove(local_repo_path)
+sys.path.insert(0, local_repo_path)
 
-if os.path.exists(target_file_path):
-    try:
-        # ফাইলের ডিরেক্ট পাথ থেকে মডিউল স্পেক তৈরি করা
-        spec = importlib.util.spec_from_file_location("local_api", target_file_path)
-        api = importlib.util.module_from_spec(spec)
-        # সিস্টেমে মডিউলটি রেজিস্টার করা যেন ভেতরের লোকাল ফাইলগুলো একে অপরকে পায়
-        sys.modules["local_api"] = api
-        spec.loader.exec_module(api)
-        print("Success: Locally forced api.py loaded successfully!")
-    except Exception as imp_err:
-        print(f"Forced import failed: {imp_err}")
-else:
-    print(f"Critical Error: api.py not found at {target_file_path}")
+# এবার একদম ফ্রেশভাবে আমাদের লোকাল api.py ইম্পোর্ট হবে
+try:
+    import api
+except ImportError as err:
+    print(f"Critical Error loading api.py: {err}")
+    api = None
 
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
-# অসিঙ্ক ফাংশনগুলোকে ফ্ল্যাক্সে রান করার জন্য হেল্পার
 def run_async(async_func):
     return asyncio.run(async_func)
 
@@ -45,9 +38,7 @@ def run_async(async_func):
 @app.route('/v1/homepage/banner', methods=['GET'])
 def get_homepage_banner():
     if not api: return jsonify({"status": "error", "message": "API module missing"})
-    try:
-        data = run_async(api.get_banner())
-        return jsonify({"status": "success", "data": data})
+    try: return jsonify({"status": "success", "data": run_async(api.get_banner())})
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/v1/homepage/trending', methods=['GET'])
@@ -73,9 +64,7 @@ def search_v1():
     if not api: return jsonify({"status": "error", "message": "API module missing"})
     q = request.args.get('q', '')
     if not q: return jsonify({"status": "error", "message": "Query parameter 'q' is missing"})
-    try:
-        data = run_async(api.get_search_results(q))
-        return jsonify({"status": "success", "data": data})
+    try: return jsonify({"status": "success", "data": run_async(api.get_search_results(q))})
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
