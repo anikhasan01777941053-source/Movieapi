@@ -63,7 +63,9 @@ def get_movie_or_series_detail(slug):
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
 
-# ==================== 🔥 নতুন ৪MD বাইপাস স্ট্রিম রুট ====================
+import httpx # হেডার ও এপিআই রিকোয়েস্ট হ্যান্ডেল করার জন্য
+
+# ==================== 🔥 ExoPlayer এর জন্য ডিরেক্ট মিডিয়া সোর্স রুট ====================
 @app.route('/api/stream/<id>', methods=['GET'])
 def get_stream_link(id):
     detail_path = request.args.get('detail_path', '')
@@ -72,39 +74,60 @@ def get_stream_link(id):
     
     streams_list = []
     
+    # মুভিবক্সের অফিশিয়াল মোবাইল প্লেয়ার এপিআই এন্ডপয়েন্ট
+    player_api_url = "https://h5.aoneroom.com/wefeed-h5-bff/web/subject/play-info"
+    
+    # প্লেয়ারকে আসল মোবাইল ব্রাউজার হিসেবে প্রমাণ করার জন্য মাস্ট-হ্যাভ হেডার্স
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://h5.aoneroom.com",
+        "Referer": f"https://h5.aoneroom.com/player?id={id}&se={season_num}&ep={episode_num}&source=ailok.pc",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+    }
+    
+    # এপিআই প্যারামিটার্স
+    params = {
+        "subjectId": str(id),
+        "seasonNum": str(season_num),
+        "episodeNum": str(episode_num)
+    }
+    
     try:
-        # ১. প্রথমে ব্যাকএন্ড স্ক্র্যাপার দিয়ে ট্রাই করা (যদি আইপি ব্লক ছুটে যায়)
-        if api:
-            try:
-                raw_streams = run_async(api.get_stream_sources(
-                    subject_id=str(id),
-                    detail_path=str(detail_path),
-                    se=int(season_num),
-                    ep=int(episode_num)
-                ))
-                if raw_streams and isinstance(raw_streams, list):
-                    for s in raw_streams:
-                        if isinstance(s, dict) and s.get("url"):
-                            streams_list.append({"quality": s.get("quality", "HD"), "url": s.get("url")})
-            except Exception:
-                pass # ৪MD এরর আসলে স্কিপ করবে
-
-        # ২. 🔥 চিরস্থায়ী সমাধান (৪MD বাইপাস): অফিশিয়াল H5 গেটওয়ে প্লেয়ার সোর্স তৈরি
-        # এটি ইউজারের ব্রাউজার আইপি ব্যবহার করে প্লে হবে, তাই ৪MD আসবে না
-        h5_player_url = f"https://h5.aoneroom.com/player?id={id}&se={season_num}&ep={episode_num}&source=ailok.pc"
-        streams_list.append({
-            "quality": "Multi-Resolution (Official H5 Gateway)",
-            "url": h5_player_url,
-            "note": "Open this link directly in any browser or webview to play seamlessly."
-        })
+        # ক্লায়েন্ট রিকোয়েস্ট জেনারেট করা (৪০৩ এড়াতে হেডারসহ)
+        with httpx.Client(headers=headers, timeout=10.0) as client:
+            response = client.get(player_api_url, params=params)
+            
+            if response.status_code == 200:
+                res_json = response.json()
+                play_data = res_json.get("data", {})
+                
+                # প্লেয়ার অ্যাড্রেস অবজেক্ট চেক করা
+                video_address = play_data.get("playAddress") or play_data.get("videoAddress")
+                
+                if video_address and isinstance(video_address, dict):
+                    direct_url = video_address.get("url")
+                    quality = video_address.get("definition", "Auto (HD)")
+                    
+                    if direct_url:
+                        streams_list.append({
+                            "quality": f"ExoPlayer Direct ({quality})",
+                            "url": direct_url,
+                            "player_type": "direct_media_stream"
+                        })
         
-        # ৩. ব্যাকআপ ওয়ান-রুম ডিরেক্ট ওয়েব প্লেয়ার লিংক
-        web_player_url = f"https://www.aoneroom.com/play/{id}?season={season_num}&episode={episode_num}"
-        streams_list.append({
-            "quality": "Web Stream (Direct Backup)",
-            "url": web_player_url
-        })
-
+        # ফলব্যাক লজিক: কোনো কারণে রেন্ডার আইপি ব্লক থাকলে এইচ৫ ওয়েব প্লেয়ার ব্যাকআপ হিসেবে থাকবে
+        if not streams_list:
+            h5_url = f"https://h5.aoneroom.com/player?id={id}&se={season_num}&ep={episode_num}&source=ailok.pc"
+            streams_list.append({
+                "quality": "WebView Fallback (H5 Player)",
+                "url": h5_url,
+                "player_type": "webview_embed"
+            })
+            
         return jsonify({
             "status": "success",
             "id": id,
@@ -112,9 +135,22 @@ def get_stream_link(id):
             "episode": episode_num,
             "streams": streams_list
         })
+        
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
+        # এরর আসলেও ব্যাকআপ ওয়েব প্লেয়ার রেডি রাখবে যেন অ্যাপ ক্র্যাশ না করে
+        h5_url = f"https://h5.aoneroom.com/player?id={id}&se={season_num}&ep={episode_num}&source=ailok.pc"
+        return jsonify({
+            "status": "success",
+            "id": id,
+            "season": season_num,
+            "episode": episode_num,
+            "streams": [{
+                "quality": "WebView Fallback (H5 Player)",
+                "url": h5_url,
+                "player_type": "webview_embed"
+            }],
+            "error_log": str(e)
+        })
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
